@@ -1,5 +1,5 @@
 // Service worker: lưu app vào máy để dùng offline.
-const CACHE = 'adhd-baolau-v1';
+const CACHE = 'focus-v2';
 const FILES = ['./', './index.html', './style.css', './app.js', './ui.js', './manifest.webmanifest',
   './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 

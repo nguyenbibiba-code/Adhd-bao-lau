@@ -3,7 +3,8 @@
 const ui = {
   view: 'today', tag: null, tagMode: 'list', tagPeriod: '7', statPeriod: 'today',
   libQ: '', libTag: '', libType: '', taskTab: 'stats', taskId: null, edit: null, co: null, pick: null,
-  rand: { min: 5, tags: [], res: null, skipDone: true, msg: '' }, delArm: 0
+  rand: { min: 5, tags: [], res: null, skipDone: true, msg: '' }, delArm: 0,
+  pr: { reason: null, mins: 0, adding: false }, ps: { p: 'today' }, man: null
 };
 const NAV = [['today', 'Hôm nay', '☀'], ['lib', 'Việc', '☰'], ['tags', 'Tag', '#'], ['stats', 'Thống kê', '▮'], ['more', 'Thêm', '⋯']];
 const COLORS = { fast: '#FFD400', slow: '#FFFFFF' };
@@ -12,34 +13,68 @@ function render() {
   $('#nav').innerHTML = NAV.map(([k, l, i]) => `<button class="${ui.view === k ? 'on' : ''}" data-a="nav" data-v="${k}"><span class="ic">${i}</span>${l}</button>`).join('');
   const m = $('#main'), st = m.scrollTop;
   const f = { today: vToday, lib: vLib, tags: vTags, stats: vStats, more: vMore }[ui.view];
-  m.innerHTML = f(); m.scrollTop = st;
+  m.innerHTML = f(); m.scrollTop = st; syncPbar();
 }
 A.nav = d => { ui.view = d.v; render(); $('#main').scrollTop = 0; };
 
 /* ---------- thành phần dùng chung ---------- */
+const swbgs = k => `<div class="swbg l">✓ Xong</div><div class="swbg r">${k === 'cart' ? 'Bỏ khỏi hôm nay' : '🗑 Xóa'}</div>`;
 function trow(t, o) {
   o = o || {};
-  return `<div class="trow ${o.cls || ''}" data-a="openTask" data-id="${t.id}"><span class="ico ${t.type === 'fixed' ? 'y' : ''}">${t.type === 'fixed' ? '↻' : '⚡'}</span><div class="grow"><div class="nm">${esc(t.name)}</div><div class="meta">#${esc(t.tag)}${o.meta ? ' · ' + o.meta : ''}</div></div><span class="est">${t.est}'</span>${o.add ? `<button class="btn sm" data-a="addCartBtn" data-id="${t.id}">+ Giỏ</button>` : ''}</div>`;
+  const inner = `<div class="trow ${o.cls || ''} ${o.sw ? 'swc' : ''}" data-a="openTask" data-id="${t.id}"><span class="ico ${t.type === 'fixed' ? 'y' : ''}">${t.type === 'fixed' ? '↻' : '⚡'}</span><div class="grow"><div class="nm">${esc(t.name)}</div><div class="meta">#${esc(t.tag)}${o.meta ? ' · ' + o.meta : ''}</div></div><span class="est">${t.est}'</span>${o.add ? `<button class="btn sm" data-a="addCartBtn" data-id="${t.id}">+ Hôm nay</button>` : ''}</div>`;
+  return o.sw ? `<div class="sw" data-sw="${t.id}" data-swk="${o.sw}">${swbgs(o.sw)}${inner}</div>` : inner;
 }
 A.addCartBtn = d => { addCart(d.id); refresh(); };
 A.openTask = d => { ui.taskId = d.id; ui.taskTab = 'stats'; openSheet('task', drawTask); };
 const seg = (items, cur, act) => `<div class="seg">${items.map(([k, l]) => `<button class="${cur === k ? 'on' : ''}" data-a="${act}" data-k="${k}">${l}</button>`).join('')}</div>`;
 
-/* ---------- HÔM NAY (giỏ hàng) ---------- */
+/* ---------- LÀM HÔM NAY ---------- */
+function cartRow(c) {
+  const t = T(c.id);
+  return `<div class="sw" data-sw="${t.id}" data-swk="cart">${swbgs('cart')}<div class="swc trow"><input type="checkbox" data-a="cartTick" data-id="${c.id}" ${c.on ? 'checked' : ''}><div class="grow" data-a="openTask" data-id="${t.id}"><div class="nm">${esc(t.name)}</div><div class="meta">#${esc(t.tag)}${c.carried ? ' · từ hôm trước' : ''}</div></div><span class="est">${t.est}'</span><button class="x" data-a="cartDel" data-id="${c.id}">✕</button></div></div>`;
+}
+function procIn(p) {
+  const now = Date.now(), t0 = startOfDay(now), from = p === 'today' ? t0 : p === '7' ? t0 - 6 * DAY : t0 - 29 * DAY;
+  return S.procs.filter(r => r.end >= from && r.end <= now + 1);
+}
+function procBreak(recs) {
+  const by = {}; recs.forEach(r => { by[r.reason] = by[r.reason] || { ms: 0, n: 0 }; by[r.reason].ms += r.ms; by[r.reason].n++; });
+  const tot = sum(recs.map(r => r.ms)) || 1;
+  return Object.entries(by).sort((a, b) => b[1].ms - a[1].ms).map(([k, v], i) => ({ k, ms: v.ms, n: v.n, pct: v.ms / tot * 100, c: PCOL[i % PCOL.length] }));
+}
+function procBar(recs) {
+  const rows = procBreak(recs); let x = 0;
+  return `<div class="tl" style="height:16px;margin-top:10px">${rows.map(r => { const t = `<i style="left:${x}%;width:${r.pct}%;background:${r.c}"></i>`; x += r.pct; return t; }).join('')}</div>
+  <div style="margin-top:8px">${rows.map(r => `<div class="row sp" style="padding:3px 0;font-size:14px"><span><i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${r.c};margin-right:7px"></i>${esc(r.k)}</span><span class="sub">${Math.round(r.pct)}% · ${fm(r.ms)}${r.n > 1 ? ' · ' + r.n + ' lần' : ''}</span></div>`).join('')}</div>`;
+}
+function procToday() {
+  const recs = procIn('today'), tot = sum(recs.map(r => r.ms)), p = S.proc;
+  return `<div class="card" style="border-color:#4a3d00"><div class="row sp"><div class="grow"><div class="tg">⏳ TRÌ HOÃN</div><div class="sub" style="margin-top:2px">${p ? 'Đang trì hoãn: ' + esc(p.reason) : (recs.length ? `Hôm nay đã trì hoãn <b style="color:#FFD400">${fm(tot)}</b> (${recs.length} lần)` : 'Hôm nay chưa ghi lần nào')}</div></div><button class="btn y sm" data-a="procOpen">${p ? 'Mở đồng hồ' : 'Tôi đang trì hoãn'}</button></div>${recs.length ? procBar(recs) + '<button class="lnk" data-a="procStats" style="padding:8px 0 0">Xem thống kê trì hoãn ›</button>' : ''}</div>`;
+}
 function vToday() {
   const items = S.cart.filter(c => T(c.id));
   const todo = items.filter(c => !c.done), done = items.filter(c => c.done);
   const sel = todo.filter(c => c.on), total = sum(sel.map(c => T(c.id).est));
   const today = S.runs.filter(r => r.end >= startOfDay(Date.now()));
   const dstr = new Date().toLocaleDateString('vi-VN', { weekday: 'long', day: 'numeric', month: 'numeric' });
-  return `<div class="top"><div><h1>Giỏ hôm nay</h1><div class="sub">${esc(dstr)}${today.length ? ` · đã xong ${today.length} việc` : ''}</div></div><button class="btn sm" data-a="randOpen">🎲 Chọn giùm</button></div>
+  const grp = S.settings.todayGroup;
+  let list;
+  if (!todo.length) list = '<div class="empty">Chưa có việc nào cho hôm nay.<br>Ghi nhanh một việc ở trên, thêm từ thư viện, hoặc bấm 🎲 để app chọn giùm.</div>';
+  else if (grp === 'tag') {
+    const tags = [...new Set(todo.map(c => T(c.id).tag))];
+    list = tags.map(g => { const cs = todo.filter(c => T(c.id).tag === g); return `<div class="h3" style="margin-top:12px">#${esc(g)} <span class="sub">· ${cs.length} việc · ${fmLong(sum(cs.map(c => T(c.id).est)))}</span></div>${cs.map(cartRow).join('')}`; }).join('');
+  } else list = todo.map(cartRow).join('');
+  return `<div class="top"><div><h1>Làm hôm nay</h1><div class="sub">${esc(dstr)}${today.length ? ` · đã xong ${today.length} việc` : ''}</div></div><button class="btn sm" data-a="randOpen">🎲 Chọn giùm</button></div>
+  ${procToday()}
   <div class="row" style="margin-bottom:12px"><input id="qa" placeholder="Ghi nhanh việc hôm nay…" data-a="noop"><button class="btn y" data-a="qaAdd">+</button></div>
-  ${todo.length ? todo.map(c => { const t = T(c.id); return `<div class="trow"><input type="checkbox" data-a="cartTick" data-id="${c.id}" ${c.on ? 'checked' : ''}><div class="grow" data-a="openTask" data-id="${t.id}"><div class="nm">${esc(t.name)}</div><div class="meta">#${esc(t.tag)}${c.carried ? ' · từ hôm trước' : ''}</div></div><span class="est">${t.est}'</span><button class="x" data-a="cartDel" data-id="${c.id}">✕</button></div>`; }).join('') :
-    '<div class="empty">Giỏ trống.<br>Ghi nhanh một việc ở trên, thêm từ thư viện, hoặc bấm 🎲 để app chọn giùm.</div>'}
+  ${todo.length ? seg([['tag', 'Theo tag'], ['list', 'Theo thứ tự']], grp, 'todayGroup') : ''}
+  ${list}
+  ${todo.length ? '<div class="sub" style="margin:2px 0 10px">Vuốt phải sang trái = xong (nhập thời gian). Vuốt trái sang phải = bỏ khỏi hôm nay.</div>' : ''}
   <button class="btn full" data-a="pickFromLib" style="margin:6px 0 14px">＋ Thêm từ thư viện</button>
   ${todo.length ? `<div class="sumbar"><div><div class="sub">Đã chọn ${sel.length} việc</div><b>${fmLong(total)}</b></div><button class="btn y" data-a="checkout" ${sel.length ? '' : 'disabled'}>Đồng ý →</button></div>` : ''}
   ${done.length ? `<div class="h3">Đã xong hôm nay (${done.length})</div>${done.map(c => trow(T(c.id), { cls: 'done' })).join('')}` : ''}`;
 }
+A.todayGroup = d => { S.settings.todayGroup = d.k; save(); render(); };
 A.cartTick = d => { const c = S.cart.find(x => x.id === d.id && !x.done); if (c) { c.on = !c.on; save(); render(); } };
 A.cartDel = d => { S.cart = S.cart.filter(c => !(c.id === d.id && !c.done)); save(); render(); };
 A.qaAdd = () => {
@@ -51,6 +86,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Enter') return;
   if (e.target.id === 'qa') A.qaAdd();
   if (e.target.id === 'ideain') A.ideaAdd();
+  if (e.target.id === 'procnew') A.reasonAdd();
   if (e.target.id === 'libq') { const v = e.target.value.trim(); if (v && !S.tasks.some(t => !t.done && t.name.toLowerCase() === v.toLowerCase())) A.libCreate(); }
 });
 
@@ -65,7 +101,7 @@ function libList() {
   ts.sort((a, b) => (last(b.id) - last(a.id)) || (b.created - a.created));
   const exact = q && S.tasks.some(t => !t.done && t.name.toLowerCase() === q);
   return `${q && !exact ? `<div class="trow" data-a="libCreate" style="border-color:#FFD400"><span class="ico y">+</span><div class="grow nm">Tạo mới “${esc(ui.libQ.trim())}”</div></div>` : ''}
-  ${ts.length ? ts.map(t => { const r = runsOfTask(t.id)[0]; return trow(t, { add: true, meta: (t.type === 'fixed' ? 'cố định' : 'nhanh') + (r ? ' · lần cuối ' + fm(r.total) : '') }); }).join('') : (q ? '' : '<div class="empty">Chưa có việc nào.</div>')}`;
+  ${ts.length ? ts.map(t => { const r = runsOfTask(t.id)[0]; return trow(t, { add: true, sw: 'lib', meta: (t.type === 'fixed' ? 'cố định' : 'nhanh') + (r ? ' · lần cuối ' + fm(r.total) : '') }); }).join('') : (q ? '' : '<div class="empty">Chưa có việc nào.</div>')}`;
 }
 function vLib() {
   return `<div class="top"><h1>Thư viện việc</h1></div>
@@ -97,7 +133,7 @@ function drawTask() {
     ${(t.steps || []).length ? `<div class="kv" style="display:block"><span>Việc nhỏ</span><ul class="steps" style="margin-top:6px">${t.steps.map(s => `<li><span>${esc(s.t)}</span><b>${s.m}'</b></li>`).join('')}</ul></div>` : ''}
   </div>
   ${t.done ? `<div class="row" style="margin-bottom:12px"><button class="btn full" data-a="redo" data-id="${t.id}">↻ Làm lại</button><button class="btn full" data-a="toFixed" data-id="${t.id}">→ Việc cố định</button></div>` :
-    holdBtn('startTask', 'Giữ 5 giây để bắt đầu', `data-id="${t.id}"`) + `<div class="row" style="margin-bottom:6px"><button class="btn full" data-a="addCartBtn" data-id="${t.id}">+ Giỏ hôm nay</button><button class="btn full" data-a="editTask" data-id="${t.id}">✎ Sửa</button></div>`}
+    holdBtn('startTask', 'Giữ 5 giây để bắt đầu', `data-id="${t.id}"`) + `<div class="row" style="margin-bottom:6px"><button class="btn full" data-a="addCartBtn" data-id="${t.id}">+ Làm hôm nay</button><button class="btn full" data-a="editTask" data-id="${t.id}">✎ Sửa</button></div>`}
   <div class="seg" style="margin-top:14px"><button class="${tab === 'stats' ? 'on' : ''}" data-a="taskTab" data-k="stats">Thống kê</button><button class="${tab === 'log' ? 'on' : ''}" data-a="taskTab" data-k="log">Nhật ký</button></div>
   ${tab === 'stats' ? taskStats(t) : taskLog(t)}`;
 }
@@ -114,7 +150,7 @@ function taskLog(t) {
     const d = new Date(r.start), ds = `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${clock(r.start)}`;
     const im = sum(r.ints.map(i => i.ms));
     return `<div class="logrow"><div class="row sp"><b>${ds}</b><span class="est">${fm(r.pure)} thuần</span></div>
-    <div class="sub">Tổng ${fm(r.total)}${im ? ` · gián đoạn ${fm(im)} (${r.ints.length} lần)` : ''} · ước lượng ${r.est}'</div>
+    <div class="sub">${r.manual ? 'Nhập tay · ' : ''}Tổng ${fm(r.total)}${im ? ` · gián đoạn ${fm(im)} (${r.ints.length} lần)` : ''} · ước lượng ${r.est}'</div>
     <textarea data-ch="runNote" data-id="${r.id}" placeholder="Ghi chú cho lần này…">${esc(r.note || '')}</textarea></div>`;
   }).join('');
 }
@@ -154,7 +190,7 @@ function taskStats(t) {
   const bk = { 'Sáng (5–11h)': [], 'Chiều (11–17h)': [], 'Tối (17–22h)': [], 'Khuya (22–5h)': [] };
   rs.forEach(r => { const h = new Date(r.start).getHours(); bk[h >= 5 && h < 11 ? 'Sáng (5–11h)' : h >= 11 && h < 17 ? 'Chiều (11–17h)' : h >= 17 && h < 22 ? 'Tối (17–22h)' : 'Khuya (22–5h)'].push(r.total); });
   const bkr = Object.entries(bk).filter(([, v]) => v.length >= 2).map(([k, v]) => [k, med(v), v.length]).sort((a, b) => a[1] - b[1]);
-  const lat = rs.filter(r => r.addedAt && r.start > r.addedAt).map(r => r.start - r.addedAt);
+  const lat = rs.filter(r => r.addedAt && !r.manual && r.start > r.addedAt).map(r => r.start - r.addedAt);
   const real = med(tot) / MIN, sugg = Math.round(real);
   return `<div class="say">${esc(say)}</div>
   <div class="big2"><div class="stat"><b>${rs.length}</b><span>lần đã làm</span></div><div class="stat"><b>${fm(med(tot))}</b><span>trung vị (tổng)</span></div>
@@ -165,7 +201,7 @@ function taskStats(t) {
   ${im ? `<div class="h3">Gián đoạn</div><div class="card"><div class="row sp"><span>Tổng thời gian bị gián đoạn</span><b>${fm(im)}</b></div>${topI.map(([k, n]) => `<div class="row sp sub" style="margin-top:6px"><span>${esc(k)}</span><span>${n} lần</span></div>`).join('')}</div>` : ''}
   ${stepRows.length ? `<div class="h3">Từng bước (trung vị)</div><div class="card">${stepRows.map(([k, v]) => `<div class="row sp" style="padding:4px 0"><span>${esc(k)}</span><b>${fm(v)}</b></div>`).join('')}</div>` : ''}
   ${bkr.length ? `<div class="h3">Khung giờ làm nhanh nhất</div><div class="card">${bkr.map(([k, v, n], i) => `<div class="row sp" style="padding:4px 0"><span>${k}${i === 0 ? ' ★' : ''}</span><b>${fm(v)} <span class="sub">(${n} lần)</span></b></div>`).join('')}</div>` : ''}
-  ${lat.length ? `<div class="h3">Độ trễ khởi động</div><div class="card sub">Từ lúc bỏ vào giỏ đến lúc thật sự bắt đầu, thường mất <b style="color:#FFD400">${fmLong(med(lat) / MIN)}</b>${t.carried ? `. Việc này từng bị đẩy sang hôm sau ${t.carried} lần.` : '.'} Trong khi làm chỉ mất khoảng <b style="color:#FFD400">${fm(med(tot))}</b>.</div>` : (t.carried ? `<div class="h3">Độ trễ khởi động</div><div class="card sub">Việc này từng bị đẩy sang hôm sau ${t.carried} lần.</div>` : '')}
+  ${lat.length ? `<div class="h3">Độ trễ khởi động</div><div class="card sub">Từ lúc thêm vào Làm hôm nay đến lúc thật sự bắt đầu, thường mất <b style="color:#FFD400">${fmLong(med(lat) / MIN)}</b>${t.carried ? `. Việc này từng bị đẩy sang hôm sau ${t.carried} lần.` : '.'} Trong khi làm chỉ mất khoảng <b style="color:#FFD400">${fm(med(tot))}</b>.</div>` : (t.carried ? `<div class="h3">Độ trễ khởi động</div><div class="card sub">Việc này từng bị đẩy sang hôm sau ${t.carried} lần.</div>` : '')}
   ${rs.length >= 3 && sugg >= 1 && Math.abs(sugg - t.est) / t.est > 0.25 ? `<div class="card" style="border-color:#FFD400"><div style="margin-bottom:8px">Thực tế thường khoảng <b>${sugg} phút</b>, ước lượng của bạn là ${t.est}. Muốn đổi ước lượng không?</div><button class="btn y sm" data-a="applyEst" data-id="${t.id}" data-v="${sugg}">Đổi thành ${sugg} phút</button></div>` : ''}`;
 }
 A.applyEst = d => { const t = T(d.id); t.est = Math.max(1, +d.v); save(); refresh(); toast('Đã đổi ước lượng'); };
@@ -181,7 +217,7 @@ function statsBlock(runs, prev, days, title) {
   const topI = Object.entries(by).sort((a, b) => b[1].ms - a[1].ms);
   const ok = runs.filter(r => r.est > 0 && Math.abs(r.total - r.est * MIN) <= r.est * MIN * 0.2).length;
   const faster = runs.filter(r => r.total <= r.est * MIN).length;
-  const lat = runs.filter(r => r.addedAt && r.start > r.addedAt).map(r => r.start - r.addedAt);
+  const lat = runs.filter(r => r.addedAt && !r.manual && r.start > r.addedAt).map(r => r.start - r.addedAt);
   const byTask = {}; runs.forEach(r => { const k = r.taskId; (byTask[k] = byTask[k] || { name: r.name, est: r.est, tot: [], n: 0, ms: 0 }); byTask[k].n++; byTask[k].ms += r.total; byTask[k].tot.push(r.total); });
   const top = Object.values(byTask).sort((a, b) => b.ms - a.ms).slice(0, 5);
   const dev = Object.values(byTask).map(x => ({ n: x.name, d: med(x.tot) - x.est * MIN })).filter(x => Math.abs(x.d) >= 60000).sort((a, b) => Math.abs(b.d) - Math.abs(a.d)).slice(0, 3);
@@ -199,7 +235,7 @@ function statsBlock(runs, prev, days, title) {
   ${topI.length ? `<div class="h3">Gián đoạn · ${fm(im)}</div><div class="card">${topI.map(([k, v]) => `<div class="row sp" style="padding:4px 0"><span>${esc(k)}</span><span class="sub">${v.n} lần · ${fm(v.ms)}</span></div>`).join('')}</div>` : ''}
   <div class="h3">Việc tốn nhiều thời gian nhất</div><div class="card">${top.map(x => `<div class="row sp" style="padding:4px 0"><span>${esc(x.name)} <span class="sub">×${x.n}</span></span><b>${fm(x.ms)}</b></div>`).join('')}</div>
   ${dev.length ? `<div class="h3">Ước lượng lệch nhiều nhất</div><div class="card">${dev.map(x => `<div class="row sp" style="padding:4px 0"><span>${esc(x.n)}</span><span class="sub">${x.d > 0 ? 'thường chậm hơn' : 'thường nhanh hơn'} <b style="color:#FFD400">${fm(Math.abs(x.d))}</b></span></div>`).join('')}</div>` : ''}
-  ${lat.length ? `<div class="h3">Độ trễ khởi động</div><div class="card sub">Từ lúc bỏ vào giỏ đến lúc bắt đầu, thường mất <b style="color:#FFD400">${fmLong(med(lat) / MIN)}</b>.</div>` : ''}`;
+  ${lat.length ? `<div class="h3">Độ trễ khởi động</div><div class="card sub">Từ lúc thêm vào Làm hôm nay đến lúc bắt đầu, thường mất <b style="color:#FFD400">${fmLong(med(lat) / MIN)}</b>.</div>` : ''}`;
 }
 function timeline(runs) {
   const s0 = startOfDay(Date.now()), seg = [];
@@ -243,7 +279,7 @@ function periodRuns(p, pred) {
 }
 function vStats() {
   const [r, p, d] = periodRuns(ui.statPeriod);
-  return `<div class="top"><h1>Thống kê</h1></div>${seg([['today', 'Hôm nay'], ['7', '7 ngày'], ['30', '1 tháng']], ui.statPeriod, 'statP')}${statsBlock(r, p, d)}`;
+  return `<div class="top"><h1>Thống kê</h1><button class="btn sm" data-a="procStats">⏳ Trì hoãn</button></div>${seg([['today', 'Hôm nay'], ['7', '7 ngày'], ['30', '1 tháng']], ui.statPeriod, 'statP')}${statsBlock(r, p, d)}`;
 }
 A.statP = d => { ui.statPeriod = d.k; render(); };
 
@@ -271,11 +307,11 @@ function vTagDetail() {
   <div class="seg">${[['list', 'Việc'], ['bins', 'Phút'], ['bingo', 'Bingo'], ['done', 'Đã xong'], ['stats', 'Số liệu']].map(([k, l]) => `<button class="${m === k ? 'on' : ''}" data-a="tagMode" data-k="${k}" style="font-size:13px">${l}</button>`).join('')}</div>`;
   const open = S.tasks.filter(t => t.tag === g && !t.done);
   let body = '';
-  if (m === 'list') body = (open.length ? open.sort((a, b) => a.name.localeCompare(b.name, 'vi')).map(t => trow(t, { add: true, meta: t.type === 'fixed' ? 'cố định' : 'nhanh' })).join('') : '<div class="empty">Tag này chưa có việc.</div>') + `<button class="btn full" data-a="newInTag" style="margin-top:6px">＋ Thêm việc vào #${esc(g)}</button>` + (!S.tasks.some(t => t.tag === g) ? `<button class="lnk" data-a="tagDel">Xóa tag này</button>` : '');
+  if (m === 'list') body = (open.length ? open.sort((a, b) => a.name.localeCompare(b.name, 'vi')).map(t => trow(t, { add: true, sw: 'lib', meta: t.type === 'fixed' ? 'cố định' : 'nhanh' })).join('') : '<div class="empty">Tag này chưa có việc.</div>') + `<button class="btn full" data-a="newInTag" style="margin-top:6px">＋ Thêm việc vào #${esc(g)}</button>` + (!S.tasks.some(t => t.tag === g) ? `<button class="lnk" data-a="tagDel">Xóa tag này</button>` : '');
   if (m === 'bins') {
     const bins = [1, 2, 5, 10, 15, 30, 60, 9999], groups = bins.map(() => []);
     open.forEach(t => { const i = bins.findIndex(b => t.est <= b); groups[i].push(t); });
-    body = bins.map((b, i) => groups[i].length ? `<div class="h3">${b === 9999 ? 'Hơn 1 tiếng' : `Trong ${b} phút`} <span class="sub">(${groups[i].length})</span></div>${groups[i].map(t => trow(t, { add: true })).join('')}` : '').join('') || '<div class="empty">Chưa có việc để chia ngăn.</div>';
+    body = bins.map((b, i) => groups[i].length ? `<div class="h3">${b === 9999 ? 'Hơn 1 tiếng' : `Trong ${b} phút`} <span class="sub">(${groups[i].length})</span></div>${groups[i].map(t => trow(t, { add: true, sw: 'lib' })).join('')}` : '').join('') || '<div class="empty">Chưa có việc để chia ngăn.</div>';
   }
   if (m === 'bingo') body = bingoView(g);
   if (m === 'done') { const dn = S.tasks.filter(t => t.tag === g && t.done).sort((a, b) => b.doneAt - a.doneAt); body = (dn.length ? `<div class="sub" style="margin-bottom:10px">Hộp lưu các việc nhanh đã xong, để bạn kiểm tra lại.</div>` + dn.map(t => { const r = runsOfTask(t.id)[0]; return trow(t, { cls: 'done', meta: new Date(t.doneAt).toLocaleDateString('vi-VN') + (r ? ' · mất ' + fm(r.total) : '') }); }).join('') : '<div class="empty">Chưa có việc nhanh nào hoàn thành trong tag này.</div>'); }
@@ -326,7 +362,7 @@ function drawPick() {
 const pickList = ts => ts.length ? ts.map(t => `<div class="trow" data-a="pickDo" data-id="${t.id}"><span class="ico ${t.type === 'fixed' ? 'y' : ''}">${t.type === 'fixed' ? '↻' : '⚡'}</span><div class="grow"><div class="nm">${esc(t.name)}</div><div class="meta">#${esc(t.tag)}</div></div><span class="est">${t.est}'</span></div>`).join('') : '<div class="empty">Không có việc phù hợp.</div>';
 document.addEventListener('input', e => { if (e.target.id === 'pickq' && ui.pick) { ui.pick.q = e.target.value; const q = e.target.value.toLowerCase(); $('#picklist').innerHTML = pickList(S.tasks.filter(t => ui.pick.filter(t) && (!q || t.name.toLowerCase().includes(q)))); } });
 A.pickDo = d => ui.pick.onPick(d.id);
-A.pickFromLib = () => { ui.pick = { q: '', title: 'Thêm vào giỏ hôm nay', filter: t => !t.done, onPick: id => { addCart(id); refresh(); } }; openSheet('pick', drawPick); };
+A.pickFromLib = () => { ui.pick = { q: '', title: 'Thêm vào Làm hôm nay', filter: t => !t.done, onPick: id => { addCart(id); refresh(); } }; openSheet('pick', drawPick); };
 
 /* ---------- GIỎ HÀNG → THANH TOÁN ---------- */
 function openCheckout() {
@@ -381,7 +417,7 @@ function drawRand() {
   ${r.res ? `<div class="sub" style="text-align:center;margin-bottom:10px">#${esc(r.res.tag)} · ước lượng ${r.res.est}'</div>` : ''}
   ${r.msg ? `<div class="sub" style="text-align:center;margin-bottom:10px">${esc(r.msg)}</div>` : (r.tags.length ? `<div class="sub" style="text-align:center;margin-bottom:10px">${n} việc phù hợp</div>` : '<div class="sub" style="text-align:center;margin-bottom:10px">Chọn ít nhất một tag</div>')}
   <button class="btn y full" data-a="randSpin" ${r.tags.length ? '' : 'disabled'}>${r.res ? 'Quay lại' : 'QUAY'}</button>
-  ${r.res ? `<div class="row" style="margin-top:8px"><button class="btn full" data-a="randGo">Làm ngay</button><button class="btn full" data-a="randCart">+ Giỏ hôm nay</button></div>` : ''}`;
+  ${r.res ? `<div class="row" style="margin-top:8px"><button class="btn full" data-a="randGo">Làm ngay</button><button class="btn full" data-a="randCart">+ Làm hôm nay</button></div>` : ''}`;
 }
 A.randMin = d => { ui.rand.min = +d.m; ui.rand.res = null; ui.rand.msg = ''; sheets.rand._draw(); };
 A.randTag = d => { const t = ui.rand.tags, i = t.indexOf(d.g); if (i >= 0) t.splice(i, 1); else t.push(d.g); ui.rand.res = null; ui.rand.msg = ''; sheets.rand._draw(); };
@@ -485,6 +521,102 @@ A.importOpen = () => openSheet('imp', () => `<div class="hd"><h2>Nhập sao lưu
 A.impDo = () => {
   try { const d = JSON.parse($('#impta').value); if (!Array.isArray(d.tasks) || !Array.isArray(d.runs)) throw new Error('sai định dạng'); S = Object.assign(defaults(), d); S.active = null; saveNow(); closeSheet('imp'); refresh(); toast('Đã nhập xong'); } catch (e) { toast('Không đọc được: ' + e.message); }
 };
+
+
+/* ---------- NHẬP TAY KHI VUỐT XONG ---------- */
+function openManual(id) { ui.man = { id, min: T(id).est }; openSheet('man', drawMan); }
+function drawMan() {
+  const t = T(ui.man.id); if (!t) return '';
+  return `<div class="hd"><div><div class="tg">ĐÁNH DẤU XONG</div><h2>${esc(t.name)}</h2></div><button class="x" data-a="close" data-n="man">✕</button></div>
+  <div class="lbl">Bạn ước tính đã làm việc này mất bao lâu? (phút)</div>
+  <input id="manmin" type="number" inputmode="decimal" min="0" value="${ui.man.min}" style="font-size:30px;text-align:center;font-weight:800;color:#FFD400">
+  <div class="chips" style="margin-top:10px">${[1, 2, 5, 10, 15, 30, 45, 60].map(v => `<span class="chip" data-a="manChip" data-v="${v}">${v}'</span>`).join('')}</div>
+  <div class="sub" style="margin:6px 0 14px">Ước lượng của bạn cho việc này là ${t.est}'. Con số nhập sẽ ghi vào nhật ký (đánh dấu là nhập tay).</div>
+  <button class="btn y big" data-a="manSave">Lưu và hoàn thành</button>`;
+}
+A.manChip = d => { const i = $('#manmin'); if (i) i.value = d.v; };
+A.manSave = () => {
+  const v = parseFloat(String($('#manmin').value || '').replace(',', '.'));
+  if (!(v >= 0)) { toast('Nhập số phút nhé'); return; }
+  const id = ui.man.id; closeSheet('man'); setTimeout(() => finishManual(id, v), 60);
+};
+
+/* ---------- TRÌ HOÃN: đồng hồ ---------- */
+A.procOpen = () => { if (!S.proc) ui.pr = { reason: null, mins: 0, adding: false }; openSheet('proc', drawProc); };
+function drawProc() {
+  const p = S.proc, pr = ui.pr, now = Date.now();
+  const todo = S.cart.filter(c => !c.done && c.on && T(c.id)), tot = sum(todo.map(c => T(c.id).est));
+  if (p) {
+    const tx = procText(p);
+    const startAt = (p.mode === 'down' && !tx.over) ? p.start + p.target : now;
+    return `<div class="hd"><div><div class="tg">ĐANG TRÌ HOÃN</div><h2>${esc(p.reason)}</h2></div><button class="x" data-a="close" data-n="proc">✕</button></div>
+    <div class="card" style="text-align:center"><div class="est" id="proct" style="font-size:56px;font-variant-numeric:tabular-nums">${tx.main}</div><div class="sub" id="procs">${esc(tx.sub)}</div></div>
+    ${tot ? `<div class="card sub">Nếu bắt đầu làm lúc <b style="color:#FFD400">${clock(startAt)}</b>, bạn xong ${todo.length} việc đã chọn (${fmLong(tot)}) lúc <b style="color:#FFD400">${clock(startAt + tot * MIN)}</b>.</div>` : ''}
+    <button class="btn y big" data-a="procStop">Tôi bắt đầu làm việc thật rồi</button>
+    <div class="lbl">Đổi sang lý do khác</div>
+    <div class="chips">${S.reasons.filter(r => r !== p.reason).map(r => `<span class="chip" data-a="procSwitch" data-r="${esc(r)}">${esc(r)}</span>`).join('')}</div>`;
+  }
+  const sel = pr.reason, last = sel ? procLast(sel) : null, sug = last ? Math.max(1, Math.round(last.ms * 0.8 / MIN)) : 0;
+  const mins = pr.mins;
+  const opts = [...new Set([5, 10, 15, 30].filter(m => m !== sug))];
+  let info = '';
+  if (sel) {
+    const ld = last ? new Date(last.end) : null;
+    info = `<div class="card" style="border-color:#FFD400"><div style="line-height:1.5">${last ? `Lần gần nhất bạn trì hoãn vì “${esc(sel)}” là <b style="color:#FFD400">${fm(last.ms)}</b> (${pad(ld.getDate())}/${pad(ld.getMonth() + 1)}).<br>Gợi ý: cắt còn <b style="color:#FFD400">80% ≈ ${sug} phút</b>.` : `Chưa có dữ liệu về “${esc(sel)}”. Lần này cứ đặt thử một mức hoặc đếm xuôi để app học.`}</div></div>
+    <div class="lbl">Đặt giờ trì hoãn</div>
+    <div class="chips">${sug ? `<span class="chip ${mins === sug ? 'on' : ''}" data-a="procM" data-m="${sug}">Gợi ý 80% · ${sug}'</span>` : ''}${opts.map(m => `<span class="chip ${mins === m ? 'on' : ''}" data-a="procM" data-m="${m}">${m}'</span>`).join('')}<span class="chip ${!mins ? 'on' : ''}" data-a="procM" data-m="0">Đếm xuôi</span></div>
+    <input type="number" inputmode="decimal" min="1" placeholder="Hoặc tự đặt số phút…" data-ch="procCustom" style="margin-bottom:10px">
+    <div class="card sub">${mins > 0 ? `Nếu bắt đầu trì hoãn bây giờ, đến <b style="color:#FFD400;font-size:18px">${clock(now + mins * MIN)}</b> bạn mới bắt đầu làm.${tot ? `<br>Khi đó bạn xong ${todo.length} việc đã chọn lúc ${clock(now + mins * MIN + tot * MIN)}.` : ''}` : `Đếm xuôi từ bây giờ (${clock(now)}). Khi thật sự đi làm, bạn bấm chốt để biết đã trì hoãn bao lâu.`}</div>
+    <button class="btn y big" data-a="procGo">Bắt đầu tính giờ trì hoãn</button>`;
+  }
+  return `<div class="hd"><div><div class="tg">⏳ BÁO CÁO TRÌ HOÃN</div><h2>Bạn đang trì hoãn vì gì?</h2></div><button class="x" data-a="close" data-n="proc">✕</button></div>
+  <div class="chips">${S.reasons.map(r => `<span class="chip ${sel === r ? 'on' : ''}" data-a="procPick" data-r="${esc(r)}">${esc(r)}</span>`).join('')}<span class="chip" data-a="procAddToggle">＋ Thêm lý do</span></div>
+  ${pr.adding ? `<div class="row" style="margin-bottom:10px"><input id="procnew" placeholder="Lý do mới, ví dụ: Lướt mạng xã hội" data-a="noop"><button class="btn y" data-a="reasonAdd">Thêm</button></div>` : ''}
+  ${info}
+  <button class="lnk" data-a="procStats" style="display:block;margin:12px auto 0">Xem thống kê trì hoãn ›</button>`;
+}
+A.procPick = d => { const l = procLast(d.r); ui.pr.reason = d.r; ui.pr.mins = l ? Math.max(1, Math.round(l.ms * 0.8 / MIN)) : 0; sheets.proc._draw(); };
+A.procM = d => { ui.pr.mins = +d.m; sheets.proc._draw(); };
+CH.procCustom = el => { const v = parseFloat(String(el.value).replace(',', '.')); ui.pr.mins = v > 0 ? v : 0; sheets.proc._draw(); };
+A.procAddToggle = () => { ui.pr.adding = !ui.pr.adding; sheets.proc._draw(); setTimeout(() => { const i = $('#procnew'); if (i) i.focus(); }, 30); };
+A.reasonAdd = () => {
+  const i = $('#procnew'), v = i && i.value.trim(); if (!v) return;
+  const ex = S.reasons.find(r => r.toLowerCase() === v.toLowerCase()), name = ex || v; if (!ex) S.reasons.push(v);
+  const l = procLast(name); ui.pr.reason = name; ui.pr.mins = l ? Math.max(1, Math.round(l.ms * 0.8 / MIN)) : 0; ui.pr.adding = false; save(); sheets.proc._draw();
+};
+A.procGo = () => { const pr = ui.pr; if (!pr.reason) { toast('Chọn lý do trì hoãn trước'); return; } procStart(pr.reason, pr.mins > 0 ? 'down' : 'up', (pr.mins || 0) * MIN); refresh(); syncPbar(); };
+A.procStop = () => { const rec = procEnd(); closeSheet('proc'); refresh(); syncPbar(); if (rec) toast(`Đã ghi: trì hoãn ${fm(rec.ms)} vì “${rec.reason}”. Giờ làm việc đầu tiên thôi!`); };
+A.procSwitch = d => { const p = S.proc; if (!p || p.reason === d.r) return; procEnd(); procStart(d.r, 'up', 0); sheets.proc._draw(); syncPbar(); refresh(); };
+
+/* ---------- TRÌ HOÃN: thống kê ---------- */
+A.procStats = () => openSheet('procstats', drawProcStats);
+A.psP = d => { ui.ps.p = d.k; sheets.procstats._draw(); };
+function procDayBars(recs, n) {
+  const s0 = startOfDay(Date.now()) - (n - 1) * DAY, W = 320, H = 130, pb = 20, pt = 10, a = Array(n).fill(0);
+  recs.forEach(r => { const i = Math.floor((startOfDay(r.end) - s0) / DAY); if (i >= 0 && i < n) a[i] += r.ms / MIN; });
+  const mx = Math.max(1, ...a) * 1.15, bw = W / n, y = v => pt + (H - pt - pb) * (1 - v / mx), wd = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7'];
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%">${a.map((v, i) => {
+    const d = new Date(s0 + i * DAY), w = n === 7 ? bw * 0.6 : bw * 0.7, x = i * bw + (bw - w) / 2;
+    return `<rect x="${x}" y="${y(v)}" width="${w}" height="${Math.max(0, H - pb - y(v))}" rx="3" fill="#FFD400"/>` + (n === 7 ? `<text x="${i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${wd[d.getDay()]}</text><text x="${i * bw + bw / 2}" y="${y(v) - 3}" text-anchor="middle">${v >= 1 ? Math.round(v) : ''}</text>` : (i % 5 === 0 || i === n - 1 ? `<text x="${i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${d.getDate()}/${d.getMonth() + 1}</text>` : ''));
+  }).join('')}</svg><div class="legend"><span><i style="background:#FFD400"></i>Phút trì hoãn mỗi ngày</span></div>`;
+}
+function drawProcStats() {
+  const per = ui.ps.p, days = per === 'today' ? 1 : per === '7' ? 7 : 30, recs = procIn(per), tot = sum(recs.map(r => r.ms));
+  const lbl = { today: 'hôm nay', '7': '7 ngày qua', '30': '1 tháng qua' }[per];
+  let body;
+  if (!recs.length) body = '<div class="empty">Chưa có lần trì hoãn nào được ghi trong khoảng này.<br>Mỗi lần sa đà, bấm “Tôi đang trì hoãn” để đo.</div>';
+  else {
+    const perDay = tot / days, yDays = perDay * 365 / DAY, yHours = perDay * 365 / 3600000;
+    body = `<div class="big2"><div class="stat"><b>${fm(tot)}</b><span>tổng thời gian trì hoãn</span></div><div class="stat"><b>${recs.length}</b><span>lần trì hoãn</span></div>
+    <div class="stat"><b>${fm(tot / recs.length)}</b><span>trung bình mỗi lần</span></div><div class="stat"><b>${fm(perDay)}</b><span>trung bình mỗi ngày</span></div></div>
+    <div class="h3">Tỉ lệ theo lý do</div><div class="card">${procBar(recs).replace('margin-top:10px', 'margin-top:0')}</div>
+    <div class="say"><b>Quy đổi cả năm:</b> nếu mỗi ngày bạn trì hoãn như ${per === 'today' ? 'hôm nay' : 'mức trung bình ' + lbl} (${fm(perDay)} mỗi ngày), thì trong 1 năm bạn sẽ trì hoãn khoảng <b style="color:#FFD400;font-size:20px">${yDays.toFixed(1)} ngày</b> (≈ ${Math.round(yHours)} giờ), tương đương ${(yDays / 30).toFixed(1)} tháng.<div class="sub" style="margin-top:6px">Nếu cắt được 20% thì mỗi năm lấy lại khoảng ${(yDays * 0.2).toFixed(1)} ngày.</div></div>
+    ${days > 1 ? `<div class="h3">Theo ngày</div>${procDayBars(recs, days)}` : ''}
+    <div class="h3">Các lần gần nhất</div>${[...recs].sort((a, b) => b.end - a.end).slice(0, 8).map(r => `<div class="row sp" style="padding:6px 0;border-bottom:1px solid var(--line)"><span>${esc(r.reason)}<div class="sub">${clock(r.start)} → ${clock(r.end)}${r.mode === 'down' ? ' · đặt ' + fm(r.target) : ''}</div></span><b>${fm(r.ms)}</b></div>`).join('')}`;
+  }
+  return `<div class="hd"><div><div class="tg">⏳ THỐNG KÊ TRÌ HOÃN</div><h2>${lbl[0].toUpperCase() + lbl.slice(1)}</h2></div><button class="x" data-a="close" data-n="procstats">✕</button></div>
+  ${seg([['today', 'Hôm nay'], ['7', '7 ngày'], ['30', '1 tháng']], per, 'psP')}${body}`;
+}
 
 /* ---------- khởi động ---------- */
 function boot() {

@@ -1,6 +1,6 @@
 {
-  "name": "ADHD · Bao Lâu",
-  "short_name": "Bao Lâu",
+  "name": "Focus",
+  "short_name": "Focus",
   "description": "Đo xem mỗi việc mất bao lâu để hết mù thời gian",
   "start_url": "./index.html",
   "scope": "./",

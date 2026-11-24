@@ -41,7 +41,8 @@ function defaults() {
       { id: uid(), name: 'Rửa vài cái chén', tag: 'Daily', type: 'fixed', est: 5, actionSec: 20, leadIn: 'Mở nước', created: now, steps: [] }
     ],
     runs: [], tags: ['Daily'], cart: [], ideas: [], dumps: [], bingo: {}, active: null, lastTag: 'Daily',
-    settings: { ring: false, sound: true, vib: true, hold: 'A' }
+    proc: null, procs: [], reasons: ['Xem điện thoại', 'Suy nghĩ chưa xong', 'Thấy quá nhiều bước / quá sức', 'Đang phấn khích chuyện khác', 'Mệt / buồn ngủ', 'Lo lắng'],
+    settings: { ring: false, sound: true, vib: true, hold: 'A', todayGroup: 'tag' }
   };
 }
 function loadState() {
@@ -176,8 +177,8 @@ const holdBtn = (kind, label, attrs, cls) => `<button class="hold ${cls || ''}" 
 
 /* ---------- giỏ hôm nay ---------- */
 function addCart(id) {
-  if (S.cart.some(c => c.id === id && !c.done)) { toast('Đã có trong giỏ hôm nay'); return false; }
-  S.cart.push({ id, on: true, done: false, day: dayKey(Date.now()), addedAt: Date.now() }); save(); toast('Đã thêm vào giỏ hôm nay'); return true;
+  if (S.cart.some(c => c.id === id && !c.done)) { toast('Đã có trong Làm hôm nay'); return false; }
+  S.cart.push({ id, on: true, done: false, day: dayKey(Date.now()), addedAt: Date.now() }); save(); toast('Đã thêm vào Làm hôm nay'); return true;
 }
 function rollCart() {
   const today = dayKey(Date.now());
@@ -385,6 +386,119 @@ A.dumpClose = () => {
   if (v) { S.dumps.push({ at: Date.now(), text: v }); S.dumps = S.dumps.slice(-20); save(); }
   closeSheet('dump'); toast('Đã xả xong. Giờ làm một việc nhỏ nhé.');
 };
+
+
+
+/* ================= v2: vuốt, nhập tay, trì hoãn ================= */
+let undoFn = null;
+function toastAct(msg, label, fn) {
+  $$('.toast').forEach(e => e.remove());
+  const el = document.createElement('div'); el.className = 'toast';
+  el.innerHTML = `${esc(msg)} <button class="lnk" data-a="toastAct" style="color:#000;padding:0 0 0 8px;font-weight:800;text-decoration:none">${esc(label)}</button>`;
+  document.body.appendChild(el); undoFn = fn; clearTimeout(toastT);
+  toastT = setTimeout(() => { el.remove(); undoFn = null; }, 6000);
+}
+A.toastAct = () => { if (undoFn) { const f = undoFn; undoFn = null; f(); $$('.toast').forEach(e => e.remove()); } };
+
+/* vuốt: phải→trái = xong, trái→phải = xóa */
+let sw = null, swBlock = 0;
+document.addEventListener('pointerdown', e => {
+  const r = e.target.closest('[data-sw]'); if (!r || e.target.closest('input,button,select,textarea')) return;
+  sw = { r, x: e.clientX, y: e.clientY, dx: 0, on: false, pid: e.pointerId };
+});
+document.addEventListener('pointermove', e => {
+  if (!sw) return;
+  const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+  if (!sw.on) {
+    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.4) { sw.on = true; try { sw.r.setPointerCapture(sw.pid); } catch (x) { } }
+    else if (Math.abs(dy) > 12) { sw = null; return; } else return;
+  }
+  sw.dx = dx; const c = $('.swc', sw.r); if (!c) return;
+  c.style.transition = 'none'; c.style.transform = `translateX(${dx}px)`;
+  $('.swbg.l', sw.r).style.opacity = dx < 0 ? 1 : 0; $('.swbg.r', sw.r).style.opacity = dx > 0 ? 1 : 0;
+});
+function swEnd() {
+  if (!sw) return; const s = sw; sw = null; if (!s.on) return;
+  swBlock = Date.now() + 400;
+  const c = $('.swc', s.r), th = Math.min(110, s.r.offsetWidth * 0.3), ds = Object.assign({}, s.r.dataset);
+  c.style.transition = 'transform .2s';
+  if (s.dx <= -th) { c.style.transform = 'translateX(-110%)'; setTimeout(() => swAct('done', ds), 190); }
+  else if (s.dx >= th) { c.style.transform = 'translateX(110%)'; setTimeout(() => swAct('del', ds), 190); }
+  else { c.style.transform = 'translateX(0)'; $$('.swbg', s.r).forEach(b => { b.style.opacity = 0; }); }
+}
+document.addEventListener('pointerup', swEnd);
+document.addEventListener('pointercancel', swEnd);
+document.addEventListener('click', e => { if (Date.now() < swBlock) { e.stopPropagation(); e.preventDefault(); } }, true);
+function swAct(kind, ds) {
+  const id = ds.sw; if (!T(id)) { render(); return; }
+  if (kind === 'done') { render(); openManual(id); return; }
+  if (ds.swk === 'cart') removeFromToday(id); else deleteTaskUndo(id);
+}
+function removeFromToday(id) {
+  const items = S.cart.filter(c => c.id === id && !c.done); if (!items.length) { render(); return; }
+  S.cart = S.cart.filter(c => !(c.id === id && !c.done)); save(); render();
+  toastAct('Đã bỏ khỏi Làm hôm nay', 'Hoàn tác', () => { S.cart.push(...items); save(); refresh(); });
+}
+function deleteTaskUndo(id) {
+  const t = T(id); if (!t) return; const idx = S.tasks.indexOf(t), cart = S.cart.filter(c => c.id === id), cells = [];
+  Object.entries(S.bingo).forEach(([g, b]) => b.cells.forEach((c, i) => { if (c === id) cells.push([g, i, b.marks[i]]); }));
+  S.tasks.splice(idx, 1); S.cart = S.cart.filter(c => c.id !== id);
+  cells.forEach(([g, i]) => { S.bingo[g].cells[i] = null; S.bingo[g].marks[i] = false; });
+  save(); refresh();
+  toastAct('Đã xóa “' + t.name + '”', 'Hoàn tác', () => {
+    S.tasks.splice(idx, 0, t); S.cart.push(...cart);
+    cells.forEach(([g, i, m]) => { if (S.bingo[g]) { S.bingo[g].cells[i] = id; S.bingo[g].marks[i] = m; } });
+    save(); refresh();
+  });
+}
+/* hoàn thành bằng nhập tay số phút */
+function finishManual(id, min) {
+  const t = T(id); if (!t) return;
+  const now = Date.now(), ms = Math.round(min * MIN);
+  const run = { id: uid(), taskId: t.id, name: t.name, tag: t.tag, type: t.type, est: t.est, start: now - ms, end: now, pure: ms, total: ms, ints: [], steps: [], note: '', addedAt: null, manual: true };
+  S.runs.push(run);
+  if (t.type === 'quick') { t.done = true; t.doneAt = now; }
+  S.cart.forEach(c => { if (c.id === id && !c.done) c.done = true; });
+  const lines = bingoOnDone(t); saveNow();
+  celebrate(run, t, { queue: [id], qi: 0, lines }); refresh();
+}
+
+/* ---------- đo thời gian trì hoãn ---------- */
+const PCOL = ['#FFD400', '#FFFFFF', '#B38F00', '#BDBDBD', '#FFE766', '#8a8a8a', '#FFB800', '#e0e0e0'];
+function procLast(reason) { return S.procs.filter(p => p.reason === reason).sort((a, b) => b.end - a.end)[0] || null; }
+function procStart(reason, mode, targetMs) {
+  if (S.proc) procEnd();
+  S.proc = { reason, start: Date.now(), mode, target: targetMs || 0, fired: false }; save();
+}
+function procEnd() {
+  const p = S.proc; if (!p) return null;
+  const now = Date.now(), rec = { id: uid(), reason: p.reason, start: p.start, end: now, ms: now - p.start, mode: p.mode, target: p.target };
+  S.procs.push(rec); S.proc = null; save(); return rec;
+}
+function procText(p) {
+  const now = Date.now(), el = now - p.start;
+  if (p.mode === 'down') {
+    const rem = p.target - el;
+    return rem > 0 ? { main: mmss(rem), sub: `Hết giờ lúc ${clock(p.start + p.target)}, rồi bắt đầu làm nhé`, over: false } : { main: '+' + mmss(-rem), sub: 'Đã quá giờ trì hoãn bạn đặt. Bắt đầu làm thôi!', over: true };
+  }
+  return { main: mmss(el), sub: `Đã trì hoãn từ ${clock(p.start)}`, over: false };
+}
+function syncPbar() {
+  const bar = $('#pbar'), app = $('#app'); if (!bar) return;
+  const p = S.proc;
+  bar.style.display = p ? 'flex' : 'none'; app.classList.toggle('hasp', !!p);
+  if (p) { const t = procText(p); $('#pbr').textContent = p.reason; $('#pbt').textContent = t.main; }
+}
+setInterval(() => {
+  const p = S.proc;
+  if (p) {
+    const el = Date.now() - p.start;
+    if (p.mode === 'down' && !p.fired && el >= p.target) { p.fired = true; save(); vib([200, 100, 200, 100, 300]); sfx.win(); toast('Hết giờ trì hoãn! Bắt đầu việc đầu tiên thôi.'); if (sheets.proc) sheets.proc._draw(); }
+    const t = procText(p), a = $('#proct'), b = $('#procs');
+    if (a) a.textContent = t.main; if (b) b.textContent = t.sub;
+  }
+  syncPbar();
+}, 1000);
 
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveNow(); else if (S.active) tickRun(); });
 window.addEventListener('pagehide', saveNow);
