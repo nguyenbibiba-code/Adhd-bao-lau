@@ -1,7 +1,7 @@
 // Service worker: lưu app vào máy để dùng offline.
-const CACHE = 'focus-v2';
+const CACHE = 'focus-v3';
 const FILES = ['./', './index.html', './style.css', './app.js', './ui.js', './manifest.webmanifest',
-  './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
+  './focus-192.png', './focus-512.png', './focus-180.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
